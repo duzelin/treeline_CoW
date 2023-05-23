@@ -29,6 +29,8 @@ class PageGroupedDBImpl : public PageGroupedDB {
   Status BulkLoad(const std::vector<Record>& records) override;
   Status Put(const WriteOptions& options, const Key key,
              const Slice& value) override;
+  // Added by DU Zelin
+  Status PutBatch(const std::vector<Record>& pairs);
   Status Get(const Key key, std::string* value_out) override;
   Status GetRange(const Key start_key, const size_t num_records,
                   std::vector<std::pair<Key, std::string>>* results_out,

@@ -59,6 +59,9 @@ class PageGroupedDB {
   virtual Status Put(const WriteOptions& options, const Key key,
                      const Slice& value) = 0;
 
+  // Added by DU Zelin
+  virtual Status PutBatch(const std::vector<Record>& pairs) = 0;  
+
   // Retrieve the value corresponding to `key` and store it in `value_out`.
   //
   // If the `key` does not exist, `value_out` will not be changed and a status

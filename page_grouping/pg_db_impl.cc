@@ -145,6 +145,12 @@ Status PageGroupedDBImpl::Put(const WriteOptions& options, const Key key,
   return s;
 }
 
+Status PageGroupedDBImpl::PutBatch(const std::vector<Record>& pairs) {
+  Status s;
+  s = mgr_->PutBatch(pairs);
+  return s;
+}
+
 Status PageGroupedDBImpl::Get(const Key key, std::string* value_out) {
   if (!mgr_.has_value()) return Status::NotFound("DB is empty.");
   cache_.GetMasstreePointer()->thread_init(thread_id_);
