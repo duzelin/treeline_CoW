@@ -115,6 +115,12 @@ class Page {
   uint32_t GetChecksum() const;
   void SetChecksum(uint32_t checksum);
 
+  uint32_t GetMappingTable() const;
+  void SetMappingTable(uint32_t mapping);
+
+  uint32_t GetVersionNum() const;
+  void SetVersionNum(uint32_t version);
+
   class Iterator;
   friend class Iterator;
 

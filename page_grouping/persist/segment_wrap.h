@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "treeline/pg_db.h"
+#include "persist/mapping_table.h"
 #include "page.h"
 
 namespace tl {
@@ -41,12 +42,17 @@ class SegmentWrap {
   Key EncodedBaseKey() const;
   Key EncodedUpperKey() const;
 
+  MappingTable& GetMappingTable() { return mapping_table_; }
+
  private:
-  Page PageAtIndex(size_t index) const;
+  void RestoreMappingTable();
+  Page PageAtIndex(size_t index) const; // Get the Page by indirection.
+  Page PageAtIndex_phy(size_t index) const; // Directly get the Page without indirection.
   uint32_t ComputeChecksum() const;
 
   void* data_;
-  size_t pages_in_segment_;
+  size_t pages_in_segment_; // Logical page numbers
+  MappingTable mapping_table_;
 };
 
 }  // namespace pg

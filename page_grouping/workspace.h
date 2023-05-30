@@ -20,7 +20,7 @@ class Workspace {
     if (buf_ != nullptr) return buf_;
     // Add one for the overflow page.
     buf_ = PageMemoryAllocator::Allocate(
-        /*num_pages=*/SegmentBuilder::SegmentPageCounts().back() + 1);
+        /*num_pages=*/SegmentBuilder::SegmentPageCounts().back() * 2 + 1); // The buffer size is doubled, because of the CoW.
     return buf_;
   }
 

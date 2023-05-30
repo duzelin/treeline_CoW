@@ -131,7 +131,7 @@ bool LockManager::TryAcquirePageLock(const SegmentId& seg_id,
       [&granted, &requested_mode](PageLockState& lock_state) {
         switch (requested_mode) {
           case PageMode::kExclusive: {
-            if (lock_state.num_exclusive == 0 && lock_state.num_shared == 0) {
+            if (lock_state.num_exclusive == 0 && lock_state.num_shared == 0 && lock_state.num_write == 0) {
               // This code should never run since we delete lock states when
               // their counters reach 0.
               ++lock_state.num_exclusive;
@@ -142,6 +142,13 @@ bool LockManager::TryAcquirePageLock(const SegmentId& seg_id,
           case PageMode::kShared: {
             if (lock_state.num_exclusive == 0) {
               ++lock_state.num_shared;
+              granted = true;
+            }
+            break;
+          }
+          case PageMode::kWrite: {
+            if (lock_state.num_exclusive == 0 && lock_state.num_write == 0) {
+              ++lock_state.num_write;
               granted = true;
             }
             break;
@@ -174,6 +181,7 @@ void LockManager::ReleasePageLock(const SegmentId& seg_id,
           case PageMode::kExclusive: {
             assert(lock_state.num_shared == 0);
             assert(lock_state.num_exclusive == 1);
+            assert(lock_state.num_write == 0);
             --lock_state.num_exclusive;
             break;
           }
@@ -183,9 +191,15 @@ void LockManager::ReleasePageLock(const SegmentId& seg_id,
             --lock_state.num_shared;
             break;
           }
+          case PageMode::kWrite: {
+            assert(lock_state.num_exclusive == 0);
+            assert(lock_state.num_write == 1);
+            --lock_state.num_write;
+            break;
+          }
         }
         // If this evaluates to true, the lock state will be erased.
-        return lock_state.num_shared == 0 && lock_state.num_exclusive == 0;
+        return lock_state.num_shared == 0 && lock_state.num_exclusive == 0 && lock_state.num_write == 0;
       });
   assert(found);
 }

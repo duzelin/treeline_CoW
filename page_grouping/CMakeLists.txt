@@ -7,6 +7,7 @@ add_library(pg STATIC)
 target_sources(pg PRIVATE
   persist/page.cc
   persist/page.h
+  persist/mapping_table.h
   persist/segment_id.cc
   persist/segment_id.h
   persist/segment_wrap.cc

@@ -14,6 +14,7 @@ SegmentWrap::SegmentWrap(void* data, const size_t pages_in_segment)
     : data_(data), pages_in_segment_(pages_in_segment) {
   assert(pages_in_segment_ >= SegmentBuilder::SegmentPageCounts().front());
   assert(pages_in_segment_ <= SegmentBuilder::SegmentPageCounts().back());
+  RestoreMappingTable();
 }
 
 uint32_t SegmentWrap::GetSequenceNumber() const {
@@ -45,7 +46,26 @@ void SegmentWrap::ComputeAndSetChecksum() {
   PageAtIndex(1).SetChecksum(checksum);
 }
 
+void SegmentWrap::RestoreMappingTable() {
+  Page primary = PageAtIndex_phy(pages_in_segment_);
+  Page backup = PageAtIndex_phy(pages_in_segment_ * 2);
+  uint32_t version_primary = primary.GetVersionNum();
+  uint32_t version_backup = backup.GetVersionNum();
+  if (version_primary >= version_backup) {
+    mapping_table_.SetValue(primary.GetMappingTable());
+    mapping_table_.SetVersion(version_primary);
+  } else {
+    mapping_table_.SetValue(backup.GetMappingTable());
+    mapping_table_.SetVersion(version_backup);
+  }
+}
+
 Page SegmentWrap::PageAtIndex(size_t index) const {
+  size_t real_index = mapping_table_.GetPhyPageNum(index, pages_in_segment_);
+  return Page(reinterpret_cast<uint8_t*>(data_) + real_index * Page::kSize);
+}
+
+Page SegmentWrap::PageAtIndex_phy(size_t index) const {
   return Page(reinterpret_cast<uint8_t*>(data_) + index * Page::kSize);
 }
 

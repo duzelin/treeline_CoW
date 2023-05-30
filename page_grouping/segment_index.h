@@ -21,7 +21,7 @@ class SegmentIndex {
     // The key boundaries of the segment.
     // Lower is inclusive (and is the segment's base key). Upper is exclusive.
     Key lower, upper;
-    SegmentInfo sinfo;
+    SegmentInfo* sinfo;
   };
 
   explicit SegmentIndex(std::shared_ptr<LockManager> lock_manager);

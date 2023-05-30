@@ -186,7 +186,7 @@ bool SegmentIndex::LockSegmentsForRewrite(
     bool lock_granted = false;
     for (size_t attempt = 0; attempt < kMaxAttempts; ++attempt) {
       lock_granted = lock_manager_->TryAcquireSegmentLock(
-          seg.sinfo.id(), LockManager::SegmentMode::kReorg);
+          seg.sinfo->id(), LockManager::SegmentMode::kReorg);
       if (lock_granted) break;
       backoff.Wait();
     }
@@ -195,7 +195,7 @@ bool SegmentIndex::LockSegmentsForRewrite(
     // and retry.
     if (!lock_granted) {
       for (size_t i = 0; i < num_granted; ++i) {
-        lock_manager_->ReleaseSegmentLock(segments_to_lock[i].sinfo.id(),
+        lock_manager_->ReleaseSegmentLock(segments_to_lock[i].sinfo->id(),
                                           LockManager::SegmentMode::kReorg);
       }
       return false;
@@ -215,7 +215,7 @@ bool SegmentIndex::LockSegmentsForRewrite(
     auto it = index_.find(segments_to_lock.front().lower);
     for (const auto& seg : segments_to_lock) {
       if (it == index_.end() || it->first != seg.lower ||
-          !(it->second == seg.sinfo)) {
+          !(it->second == *seg.sinfo)) {
         still_valid = false;
         break;
       }
@@ -227,7 +227,7 @@ bool SegmentIndex::LockSegmentsForRewrite(
   if (!still_valid) {
     assert(num_granted == segments_to_lock.size());
     for (const auto& seg : segments_to_lock) {
-      lock_manager_->ReleaseSegmentLock(seg.sinfo.id(),
+      lock_manager_->ReleaseSegmentLock(seg.sinfo->id(),
                                         LockManager::SegmentMode::kReorg);
     }
     return false;
@@ -271,7 +271,7 @@ SegmentIndex::Entry SegmentIndex::IndexIteratorToEntry(
   // We deliberately make a copy.
   Entry entry;
   entry.lower = it->first;
-  entry.sinfo = it->second;
+  entry.sinfo = const_cast<SegmentInfo*>(&it->second);
   ++it;
   if (it == index_.end()) {
     entry.upper = std::numeric_limits<Key>::max();

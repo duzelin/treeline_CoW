@@ -50,7 +50,8 @@ class LockManager {
   // page and its overflow (if one exists).
   enum class PageMode : uint8_t {
     kShared = 0,    // S
-    kExclusive = 1  // X
+    kExclusive = 1,  // X
+    kWrite = 2
   };
 
   // Try to acquire a segment lock on `seg_id` with mode `mode`. Returns true
@@ -101,6 +102,7 @@ class LockManager {
     explicit PageLockState(PageMode initial_mode);
     LockCount num_shared = 0;
     LockCount num_exclusive = 0;
+    LockCount num_write = 0;
   };
 
   LockId SegmentLockId(const SegmentId& seg_id) const;

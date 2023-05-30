@@ -170,7 +170,7 @@ class SegmentFile {
 
   // Never changed after initialization.
   int fd_;
-  size_t pages_per_segment_;
+  size_t pages_per_segment_; // This is the physical page numbers (2 * logical page numbers)
 
   // Protected by the mutex.
   std::mutex allocation_mutex_;

@@ -68,17 +68,17 @@ Status Manager::ScanWithExperimentalPrefetching(
   // 1. Find the segment that should hold the start key.
   const auto start_seg =
       index_->SegmentForKeyWithLock(start_key, SegmentMode::kPageRead);
-  lock_manager_->ReleaseSegmentLock(start_seg.sinfo.id(),
+  lock_manager_->ReleaseSegmentLock(start_seg.sinfo->id(),
                                     SegmentMode::kPageRead);
 
   // 2. Compute how much of the segment to read based on the position of the
   // key.
   size_t start_pages_to_read = 1;
   size_t start_page_idx = 0;
-  const size_t first_segment_page_count = start_seg.sinfo.page_count();
+  const size_t first_segment_page_count = start_seg.sinfo->page_count();
   if (first_segment_page_count > 1) {
     const double pos = std::max(
-        0.0, start_seg.sinfo.model()->operator()(start_key - start_seg.lower));
+        0.0, start_seg.sinfo->model()->operator()(start_key - start_seg.lower));
     const size_t page_idx = static_cast<size_t>(pos);
     if (page_idx >= first_segment_page_count) {
       // Edge case due to numeric errors.
@@ -101,9 +101,9 @@ Status Manager::ScanWithExperimentalPrefetching(
       bg_threads_->Submit([this, start_seg, start_page_idx, start_pages_to_read,
                            buf = prefetch_buf.Allocate(start_pages_to_read)]() {
         const std::unique_ptr<SegmentFile>& sf =
-            segment_files_[start_seg.sinfo.id().GetFileId()];
+            segment_files_[start_seg.sinfo->id().GetFileId()];
         const size_t segment_byte_offset =
-            start_seg.sinfo.id().GetOffset() * Page::kSize;
+            start_seg.sinfo->id().GetOffset() * Page::kSize;
         sf->ReadPages(segment_byte_offset + start_page_idx * Page::kSize, buf,
                       start_pages_to_read);
         w_.BumpReadCount(start_pages_to_read);
@@ -112,12 +112,12 @@ Status Manager::ScanWithExperimentalPrefetching(
   pages_prefetched += start_pages_to_read;
 
   // 4. Fetch additional segments until we exhaust our estimate.
-  SegmentId prev_seg_id = start_seg.sinfo.id();
+  SegmentId prev_seg_id = start_seg.sinfo->id();
   std::optional<SegmentIndex::Entry> curr_seg =
       index_->NextSegmentForKeyWithLock(start_seg.lower,
                                         SegmentMode::kPageRead);
   if (curr_seg.has_value()) {
-    lock_manager_->ReleaseSegmentLock(curr_seg->sinfo.id(),
+    lock_manager_->ReleaseSegmentLock(curr_seg->sinfo->id(),
                                       SegmentMode::kPageRead);
   }
 
@@ -125,9 +125,9 @@ Status Manager::ScanWithExperimentalPrefetching(
   bool has_pages_remaining_in_last_segment = false;
 
   while (pages_prefetched < est_pages_to_fetch && curr_seg.has_value()) {
-    const size_t seg_page_count = curr_seg->sinfo.page_count();
+    const size_t seg_page_count = curr_seg->sinfo->page_count();
     const size_t seg_byte_offset =
-        curr_seg->sinfo.id().GetOffset() * Page::kSize;
+        curr_seg->sinfo->id().GetOffset() * Page::kSize;
     const size_t pages_to_read =
         std::min(seg_page_count, est_pages_to_fetch - pages_prefetched);
     if (pages_to_read < seg_page_count) {
@@ -138,7 +138,7 @@ Status Manager::ScanWithExperimentalPrefetching(
         [this, curr_seg = *curr_seg, seg_byte_offset, pages_to_read,
          buf = prefetch_buf.Allocate(pages_to_read)]() {
           const std::unique_ptr<SegmentFile>& sf =
-              segment_files_[curr_seg.sinfo.id().GetFileId()];
+              segment_files_[curr_seg.sinfo->id().GetFileId()];
           sf->ReadPages(seg_byte_offset, buf, pages_to_read);
           w_.BumpReadCount(pages_to_read);
           return std::make_pair(buf, pages_to_read);
@@ -147,12 +147,12 @@ Status Manager::ScanWithExperimentalPrefetching(
 
     // Go to the next segment. To avoid an unnecessary lock acquisiton, we check
     // first if we need more records.
-    prev_seg_id = curr_seg->sinfo.id();
+    prev_seg_id = curr_seg->sinfo->id();
     if (pages_prefetched < est_pages_to_fetch) {
       curr_seg = index_->NextSegmentForKeyWithLock(curr_seg->lower,
                                                    SegmentMode::kPageRead);
       if (curr_seg.has_value()) {
-        lock_manager_->ReleaseSegmentLock(curr_seg->sinfo.id(),
+        lock_manager_->ReleaseSegmentLock(curr_seg->sinfo->id(),
                                           SegmentMode::kPageRead);
       }
     }
