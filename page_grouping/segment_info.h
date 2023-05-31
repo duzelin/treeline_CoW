@@ -13,10 +13,32 @@ namespace pg {
 class SegmentInfo {
  public:
   SegmentInfo(SegmentId id, std::optional<plr::Line64> model)
-      : raw_id_(id.value() & kSegmentIdMask), model_(model) {}
+      : raw_id_(id.value() & kSegmentIdMask), model_(model) { }
 
   // Represents an invalid `SegmentInfo`.
   SegmentInfo() : raw_id_(kInvalidSegmentId) {}
+
+  SegmentInfo(SegmentInfo& sinfo) : raw_id_(sinfo.raw_id_), model_(sinfo.model_), mapping_table_(sinfo.mapping_table_) { }
+
+  SegmentInfo(SegmentInfo&& sinfo) : raw_id_(sinfo.raw_id_), model_(sinfo.model_), mapping_table_(sinfo.mapping_table_) { }
+
+  SegmentInfo& operator=(const SegmentInfo& sinfo) {
+    if (this != &sinfo) {
+      this->raw_id_ = sinfo.raw_id_;
+      this->model_ = sinfo.model_;
+      this->mapping_table_ = sinfo.mapping_table_;
+    }
+    return *this;
+  }
+
+  SegmentInfo& operator=(const SegmentInfo&& sinfo) {
+    if (this != &sinfo) {
+      this->raw_id_ = sinfo.raw_id_;
+      this->model_ = sinfo.model_;
+      this->mapping_table_ = sinfo.mapping_table_;
+    }
+    return *this;
+  }
 
   SegmentId id() const {
     return raw_id_ == kInvalidSegmentId ? SegmentId()

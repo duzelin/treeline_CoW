@@ -187,7 +187,7 @@ std::pair<Key, SegmentInfo> Manager::LoadIntoNewSegment(
 
   const Key base_key = seg.records[0].first;
   const PageBuffer& buf = w_.buffer();
-  memset(buf.get(), 0, pg::Page::kSize * seg.page_count);
+  memset(buf.get(), 0, pg::Page::kSize * seg.page_count * 2); // The physical page count is doubled.
   if (seg.page_count > 1) {
     const auto lower_boundaries = ComputePageLowerBoundaries(seg);
     auto page_start = seg.records.begin();
@@ -248,7 +248,7 @@ std::pair<Key, SegmentInfo> Manager::LoadIntoNewSegment(
                        /*page_offset=*/byte_offset / pg::Page::kSize);
   }
 
-  sf->WritePages(seg_id.GetOffset() * Page::kSize, buf.get(), seg.page_count);
+  sf->WritePages(seg_id.GetOffset() * Page::kSize, buf.get(), seg.page_count * 2); // The physical page count is doubled.
   w_.BumpWriteCount(seg.page_count);
   return std::make_pair(
       base_key, SegmentInfo(seg_id, seg.model.has_value()

@@ -418,7 +418,7 @@ size_t Manager::WriteToSegment(
       segment.sinfo->PageForKey(segment.lower, records[start_idx].first); // Get the logical page number for the first record.
   lock_manager_->AcquirePageLock(segment.sinfo->id(), curr_page_idx,
                                  PageMode::kWrite); // TODO: change the lock mode
-  size_t curr_phy_page_idx = segment.sinfo->GetPhyPage(curr_page_idx); // Translate the logical page number to physical page number.
+  curr_phy_page_idx = segment.sinfo->GetPhyPage(curr_page_idx); // Translate the logical page number to physical page number.
   ReadPage(segment.sinfo->id(), curr_phy_page_idx, orig_page_buf); // Read the physical page into memory buffer.
 
   for (size_t i = start_idx; i < end_idx; ++i) {

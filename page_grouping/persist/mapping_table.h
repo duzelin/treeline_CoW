@@ -10,12 +10,28 @@ namespace pg {
 
 class MappingTable {
     public:
-    MappingTable() : mappings_(0), version_num_(0) {};
+    MappingTable() {mappings_.store(0); version_num_.store(0); };
     MappingTable(uint32_t value, uint32_t num) { mappings_.store(value); version_num_.store(num); }
+    MappingTable(MappingTable& mt) { mappings_.store(mt.GetValue()); version_num_.store(mt.GetVersion()); }
+    MappingTable(MappingTable&& mt) { mappings_.store(mt.GetValue()); version_num_.store(mt.GetVersion()); }
+    MappingTable& operator=(const MappingTable& mt) {
+        if (this != &mt) {
+            this->mappings_.store(mt.GetValue());
+            this->version_num_.store(mt.GetVersion());
+        }
+        return *this;
+    }
+    MappingTable& operator=(const MappingTable&& mt) {
+        if (this != &mt) {
+            this->mappings_.store(mt.GetValue());
+            this->version_num_.store(mt.GetVersion());
+        }
+        return *this;
+    }
     void SetValue(uint32_t value) { mappings_.store(value); }
     void SetVersion(uint32_t version_num) { version_num_.store(version_num); }
-    uint32_t GetValue() { return mappings_.load(); }
-    uint32_t GetVersion() { return version_num_.load(); }
+    uint32_t GetValue() const { return mappings_.load(); }
+    uint32_t GetVersion() const { return version_num_.load(); }
     void ReversePages(std::vector<uint32_t>& ModifiedPages) {
         bool exchanged = false;
         while (!exchanged) {

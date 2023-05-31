@@ -3,7 +3,7 @@
 #include <cstdint>
 
 #include "treeline/pg_db.h"
-#include "persist/mapping_table.h"
+#include "mapping_table.h"
 #include "page.h"
 
 namespace tl {
