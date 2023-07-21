@@ -133,7 +133,7 @@ class Manager {
   // be less than the number of records passed to the method; this indicates
   // that a reorganization intervened during the write. If this happens, the
   // caller should retry the write.
-  size_t WriteToSegment(const SegmentIndex::Entry& segment,
+  size_t WriteToSegment(SegmentIndex::EntryP& segment,
                         const std::vector<std::pair<Key, Slice>>& records,
                         size_t start_idx, size_t end_idx);
 
@@ -152,7 +152,7 @@ class Manager {
   // NOTE: `segments_to_rewrite` must consist of contiguous segments and the
   // caller must already hold the appropriate locks.
   Status RewriteSegmentsImpl(
-      std::vector<SegmentIndex::Entry> segments_to_rewrite,
+      std::vector<SegmentIndex::EntryP> segments_to_rewrite,
       std::vector<Record>::const_iterator addtl_rec_begin,
       std::vector<Record>::const_iterator addtl_rec_end);
 

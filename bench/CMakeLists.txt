@@ -9,7 +9,7 @@ add_library(bench_common
   common/timing.h)
 # Any targets linking to `bench_common` will also link to `treeline` and will be
 # able to include TreeLine internal headers.
-target_link_libraries(bench_common PUBLIC treeline)
+target_link_libraries(bench_common PUBLIC treeline_cow)
 target_include_directories(bench_common
   PUBLIC
     ${PROJECT_SOURCE_DIR}
@@ -34,7 +34,7 @@ target_link_libraries(bench_common_config PUBLIC
   gflags
   rocksdb
   leanstore
-  pg_treeline
+  pg_treeline_cow
   libcuckoo)
 
 # The microbench directory contains microbenchmarks used to guide TreeLine's

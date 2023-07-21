@@ -42,6 +42,23 @@ SegmentIndex::Entry SegmentIndex::SegmentForKeyWithLock(
   }
 }
 
+SegmentIndex::EntryP SegmentIndex::SegmentForKeyWithLockP(
+    const Key key, LockManager::SegmentMode mode) const {
+  RandExpBackoff backoff(kBackoffSaturate);
+  while (true) {
+    {
+      std::shared_lock<std::shared_mutex> lock(mutex_);
+      const auto it = SegmentForKeyImpl(key);
+      const bool lock_granted =
+          lock_manager_->TryAcquireSegmentLock(it->second.id(), mode);
+      if (lock_granted) {
+        return IndexIteratorToEntryP(it);
+      }
+    }
+    backoff.Wait();
+  }
+}
+
 std::optional<SegmentIndex::Entry> SegmentIndex::NextSegmentForKey(
     const Key key) const {
   std::shared_lock<std::shared_mutex> lock(mutex_);
@@ -80,14 +97,14 @@ void SegmentIndex::SetSegmentOverflow(const Key key, bool overflow) {
   it->second.SetOverflow(overflow);
 }
 
-std::vector<SegmentIndex::Entry> SegmentIndex::FindAndLockRewriteRegion(
-    const Key segment_base, const uint32_t search_radius) const {
-  std::vector<SegmentIndex::Entry> segments_to_rewrite;
+std::vector<SegmentIndex::EntryP> SegmentIndex::FindAndLockRewriteRegion(
+    const Key segment_base, const uint32_t search_radius) {
+  std::vector<SegmentIndex::EntryP> segments_to_rewrite;
   {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     const auto it = index_.lower_bound(segment_base);
     assert(it != index_.end());
-    segments_to_rewrite.emplace_back(IndexIteratorToEntry(it));
+    segments_to_rewrite.emplace_back(IndexIteratorToEntryP(it));
 
     // Scan backward.
     if (it != index_.begin()) {
@@ -97,7 +114,7 @@ std::vector<SegmentIndex::Entry> SegmentIndex::FindAndLockRewriteRegion(
         --prev_it;
         --num_to_check;
         if (!prev_it->second.HasOverflow()) break;
-        segments_to_rewrite.emplace_back(IndexIteratorToEntry(prev_it));
+        segments_to_rewrite.emplace_back(IndexIteratorToEntryP(prev_it));
         if (prev_it == index_.begin()) break;
       }
     }
@@ -109,7 +126,7 @@ std::vector<SegmentIndex::Entry> SegmentIndex::FindAndLockRewriteRegion(
          num_to_check > 0 && next_it != index_.end();
          ++next_it, --num_to_check) {
       if (!next_it->second.HasOverflow()) break;
-      segments_to_rewrite.emplace_back(IndexIteratorToEntry(next_it));
+      segments_to_rewrite.emplace_back(IndexIteratorToEntryP(next_it));
     }
   }
   assert(!segments_to_rewrite.empty());
@@ -128,10 +145,10 @@ std::vector<SegmentIndex::Entry> SegmentIndex::FindAndLockRewriteRegion(
   return segments_to_rewrite;
 }
 
-std::optional<std::vector<SegmentIndex::Entry>>
+std::optional<std::vector<SegmentIndex::EntryP>>
 SegmentIndex::FindAndLockNextOverflowRegion(const Key start_key,
-                                            const Key end_key) const {
-  std::vector<Entry> overflow_region;
+                                            const Key end_key) {
+  std::vector<EntryP> overflow_region;
   {
     std::shared_lock<std::shared_mutex> lock(mutex_);
 
@@ -150,7 +167,7 @@ SegmentIndex::FindAndLockNextOverflowRegion(const Key start_key,
       return overflow_region;
     }
     do {
-      overflow_region.emplace_back(IndexIteratorToEntry(it));
+      overflow_region.emplace_back(IndexIteratorToEntryP(it));
       ++it;
     } while (it != index_.end() && it->first < end_key &&
              it->second.HasOverflow());
@@ -164,13 +181,13 @@ SegmentIndex::FindAndLockNextOverflowRegion(const Key start_key,
   const bool succeeded = LockSegmentsForRewrite(overflow_region);
   if (!succeeded) {
     // Empty optional to indicate that the caller should retry.
-    return std::optional<std::vector<Entry>>();
+    return std::optional<std::vector<EntryP>>();
   }
   return overflow_region;
 }
 
 bool SegmentIndex::LockSegmentsForRewrite(
-    const std::vector<SegmentIndex::Entry>& segments_to_lock) const {
+    std::vector<SegmentIndex::EntryP>& segments_to_lock) {
   // There is an unlikely pathological case where the segments we are trying to
   // lock for a rewrite end up being reused in different parts of the key space.
   // To avoid causing a deadlock, we attempt to acquire the segment lock a
@@ -186,7 +203,7 @@ bool SegmentIndex::LockSegmentsForRewrite(
     bool lock_granted = false;
     for (size_t attempt = 0; attempt < kMaxAttempts; ++attempt) {
       lock_granted = lock_manager_->TryAcquireSegmentLock(
-          seg.sinfo->id(), LockManager::SegmentMode::kReorg);
+          seg.sinfo.id(), LockManager::SegmentMode::kReorg);
       if (lock_granted) break;
       backoff.Wait();
     }
@@ -195,7 +212,7 @@ bool SegmentIndex::LockSegmentsForRewrite(
     // and retry.
     if (!lock_granted) {
       for (size_t i = 0; i < num_granted; ++i) {
-        lock_manager_->ReleaseSegmentLock(segments_to_lock[i].sinfo->id(),
+        lock_manager_->ReleaseSegmentLock(segments_to_lock[i].sinfo.id(),
                                           LockManager::SegmentMode::kReorg);
       }
       return false;
@@ -213,11 +230,13 @@ bool SegmentIndex::LockSegmentsForRewrite(
   {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     auto it = index_.find(segments_to_lock.front().lower);
-    for (const auto& seg : segments_to_lock) {
+    for (auto& seg : segments_to_lock) {
       if (it == index_.end() || it->first != seg.lower ||
-          !(it->second == *seg.sinfo)) {
+          !(it->second.id() == seg.sinfo.id())) {
         still_valid = false;
         break;
+      } else if (!(it->second == seg.sinfo)) {
+        seg.sinfo = it->second;
       }
       ++it;
     }
@@ -227,7 +246,7 @@ bool SegmentIndex::LockSegmentsForRewrite(
   if (!still_valid) {
     assert(num_granted == segments_to_lock.size());
     for (const auto& seg : segments_to_lock) {
-      lock_manager_->ReleaseSegmentLock(seg.sinfo->id(),
+      lock_manager_->ReleaseSegmentLock(seg.sinfo.id(),
                                         LockManager::SegmentMode::kReorg);
     }
     return false;
@@ -271,7 +290,7 @@ SegmentIndex::Entry SegmentIndex::IndexIteratorToEntry(
   // We deliberately make a copy.
   Entry entry;
   entry.lower = it->first;
-  entry.sinfo = const_cast<SegmentInfo*>(&it->second);
+  entry.sinfo = it->second;
   ++it;
   if (it == index_.end()) {
     entry.upper = std::numeric_limits<Key>::max();
@@ -279,6 +298,22 @@ SegmentIndex::Entry SegmentIndex::IndexIteratorToEntry(
     entry.upper = it->first;
   }
   return entry;
+}
+
+SegmentIndex::EntryP SegmentIndex::IndexIteratorToEntryP(
+    SegmentIndex::OrderedMap::const_iterator it) const {
+  EntryP entry_p;
+  entry_p.lower = it->first;
+  entry_p.sinfo = it->second;
+  entry_p.sinfop = const_cast<SegmentInfo*>(&it->second);
+  entry_p.index_version = index_version_;
+  ++it;
+  if (it == index_.end()) {
+    entry_p.upper = std::numeric_limits<Key>::max();
+  } else {
+    entry_p.upper = it->first;
+  }
+  return entry_p;
 }
 
 uint64_t SegmentIndex::GetSizeFootprint() const {

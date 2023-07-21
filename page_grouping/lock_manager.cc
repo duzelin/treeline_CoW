@@ -242,6 +242,9 @@ LockManager::PageLockState::PageLockState(PageMode initial_mode) {
     case PageMode::kShared:
       num_shared = 1;
       break;
+    case PageMode::kWrite:
+      num_write = 1;
+      break;
   }
 }
 

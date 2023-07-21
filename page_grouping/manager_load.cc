@@ -114,7 +114,7 @@ Manager Manager::BulkLoadIntoSegments(
   for (size_t i = 0; i < SegmentBuilder::SegmentPageCounts().size(); ++i) {
     segment_files.push_back(std::make_unique<SegmentFile>(
         db_path / (kSegmentFilePrefix + std::to_string(i)),
-        /*pages_per_segment=*/SegmentBuilder::SegmentPageCounts()[i],
+        /*pages_per_segment=*/SegmentBuilder::SegmentPageCounts()[i] * 2, // Physical size is doubled.
         options.use_memory_based_io));
   }
 
@@ -187,7 +187,7 @@ std::pair<Key, SegmentInfo> Manager::LoadIntoNewSegment(
 
   const Key base_key = seg.records[0].first;
   const PageBuffer& buf = w_.buffer();
-  memset(buf.get(), 0, pg::Page::kSize * seg.page_count * 2); // The physical page count is doubled.
+  memset(buf.get(), 0, pg::Page::kSize * seg.page_count * 2); // The physical page count is doubled, but we only need to read the head half.
   if (seg.page_count > 1) {
     const auto lower_boundaries = ComputePageLowerBoundaries(seg);
     auto page_start = seg.records.begin();
@@ -248,7 +248,7 @@ std::pair<Key, SegmentInfo> Manager::LoadIntoNewSegment(
                        /*page_offset=*/byte_offset / pg::Page::kSize);
   }
 
-  sf->WritePages(seg_id.GetOffset() * Page::kSize, buf.get(), seg.page_count * 2); // The physical page count is doubled.
+  sf->WritePages(seg_id.GetOffset() * Page::kSize, buf.get(), seg.page_count * 2); // The physical page count is doubled, but we only need to write the head half.
   w_.BumpWriteCount(seg.page_count);
   return std::make_pair(
       base_key, SegmentInfo(seg_id, seg.model.has_value()

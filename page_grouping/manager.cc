@@ -92,7 +92,7 @@ Manager Manager::Reopen(const fs::path& db,
       SegmentId id(i, seg_idx * pages_per_segment);
       sf->ReadPages(seg_idx * bytes_per_segment, buf.get(), pages_per_segment); // The segment's physical size is doubled with the CoW.
 
-      SegmentWrap sw(buf.get(), pages_per_segment);
+      SegmentWrap sw(buf.get(), pages_per_segment / 2);
       if (!sw.CheckChecksum() || !first_page.IsValid()) {
         // This segment is a "hole" in the file and can be reused.
         free->Add(id);
@@ -149,21 +149,28 @@ std::pair<Status, std::vector<pg::Page>> Manager::GetWithPages(
   void* overflow_page_buf = w_.buffer().get() + pg::Page::kSize;
 
   // 1. Find the segment that should hold the key.
-  const auto seg = index_->SegmentForKeyWithLock(key, SegmentMode::kPageRead);
+  auto seg = index_->SegmentForKeyWithLock(key, SegmentMode::kPageRead);
 
   // 2. Figure out the page offset, lock the page, and then read it in.
-  const size_t page_idx = seg.sinfo->PageForKey(seg.lower, key);
-  lock_manager_->AcquirePageLock(seg.sinfo->id(), page_idx, PageMode::kShared);
-  const size_t phy_page_idx = seg.sinfo->GetPhyPage(page_idx);
-  ReadPage(seg.sinfo->id(), phy_page_idx, main_page_buf);
+  const size_t page_idx = seg.sinfo.PageForKey(seg.lower, key);
+  size_t phy_page_idx = seg.sinfo.GetPhyPage(page_idx);
+  lock_manager_->AcquirePageLock(seg.sinfo.id(), page_idx, PageMode::kShared);
+  // index_->RunShared([&](auto& raw_index, auto& current_version) {
+  //   if (seg.index_version != current_version) { // The index_ has been updated and the sinfo has been moved.
+  //     auto it = raw_index.find(seg.lower);
+  //     seg.sinfop = const_cast<SegmentInfo*>(&it->second);
+  //   }
+  //   phy_page_idx = seg.sinfop->GetPhyPage(page_idx); // Translate the logical page number to physical page number.
+  // });
+  ReadPage(seg.sinfo.id(), phy_page_idx, main_page_buf);
 
   // 3. Search for the record on the page.
   pg::Page main_page(main_page_buf);
   key_utils::IntKeyAsSlice key_slice(key);
   auto status = main_page.Get(key_slice.as<Slice>(), value_out);
   if (status.ok()) {
-    lock_manager_->ReleasePageLock(seg.sinfo->id(), page_idx, PageMode::kShared);
-    lock_manager_->ReleaseSegmentLock(seg.sinfo->id(), SegmentMode::kPageRead);
+    lock_manager_->ReleasePageLock(seg.sinfo.id(), page_idx, PageMode::kShared);
+    lock_manager_->ReleaseSegmentLock(seg.sinfo.id(), SegmentMode::kPageRead);
     return {status, {main_page}};
   }
 
@@ -173,8 +180,8 @@ std::pair<Status, std::vector<pg::Page>> Manager::GetWithPages(
   */
   // TODO: We always assume at most 1 overflow page.
   if (!main_page.HasOverflow()) {
-    lock_manager_->ReleasePageLock(seg.sinfo->id(), page_idx, PageMode::kShared);
-    lock_manager_->ReleaseSegmentLock(seg.sinfo->id(), SegmentMode::kPageRead);
+    lock_manager_->ReleasePageLock(seg.sinfo.id(), page_idx, PageMode::kShared);
+    lock_manager_->ReleaseSegmentLock(seg.sinfo.id(), SegmentMode::kPageRead);
     return {Status::NotFound("Record does not exist."), {main_page}};
   }
   const SegmentId overflow_id = main_page.GetOverflow();
@@ -188,8 +195,8 @@ std::pair<Status, std::vector<pg::Page>> Manager::GetWithPages(
   pg::Page overflow_page(overflow_page_buf);
   status = overflow_page.Get(key_slice.as<Slice>(), value_out);
 
-  lock_manager_->ReleasePageLock(seg.sinfo->id(), page_idx, PageMode::kShared);
-  lock_manager_->ReleaseSegmentLock(seg.sinfo->id(), SegmentMode::kPageRead);
+  lock_manager_->ReleasePageLock(seg.sinfo.id(), page_idx, PageMode::kShared);
+  lock_manager_->ReleaseSegmentLock(seg.sinfo.id(), SegmentMode::kPageRead);
   return {status, {main_page, overflow_page}};
 }
 
@@ -207,7 +214,7 @@ Status Manager::PutBatchImpl(const std::vector<std::pair<Key, Slice>>& records,
   size_t num_attempts = 0;
   while (left_idx < end_idx) {
     ++num_attempts;
-    const auto segment = index_->SegmentForKeyWithLock(records[left_idx].first,
+    auto segment = index_->SegmentForKeyWithLockP(records[left_idx].first,
                                                        SegmentMode::kPageWrite);
     const auto left_it = records.begin() + left_idx;
     const auto end_it = records.begin() + end_idx;
@@ -286,7 +293,7 @@ Status Manager::PutBatchParallel(
 }
 
 size_t Manager::WriteToSegment(
-    const SegmentIndex::Entry& segment,
+    SegmentIndex::EntryP& segment,
     const std::vector<std::pair<Key, Slice>>& records, const size_t start_idx,
     const size_t end_idx) {
   // Simplifying assumptions:
@@ -299,10 +306,10 @@ size_t Manager::WriteToSegment(
   //   segment reorg.
 
   const size_t reorg_threshold =
-      options_.records_per_page_goal * segment.sinfo->page_count() * 2ULL;
+      options_.records_per_page_goal * segment.sinfo.page_count() * 4ULL;
   if (end_idx - start_idx > reorg_threshold) {
     // Immediately trigger a segment rewrite that merges in the records.
-    lock_manager_->ReleaseSegmentLock(segment.sinfo->id(),
+    lock_manager_->ReleaseSegmentLock(segment.sinfo.id(),
                                       SegmentMode::kPageWrite);
     Status status;
     if (options_.use_segments) {
@@ -323,11 +330,12 @@ size_t Manager::WriteToSegment(
   pg::Page orig_page(orig_page_buf);
   pg::Page overflow_page(overflow_page_buf);
 
-  // Prepare the vector 
+  // Prepare the vector to record the modified logical page. 
   // std::vector<uint32_t> modified_page_idxes;
 
   size_t curr_page_idx = 0; // Write the segment from its logical first page.
   size_t curr_phy_page_idx = 0; // The physical page number.
+  size_t curr_backup_page_idx = 0;
 
   SegmentId overflow_page_id;
   bool orig_page_dirty = false;
@@ -336,8 +344,7 @@ size_t Manager::WriteToSegment(
   pg::Page* curr_page = &orig_page; // Pointing to the current page, can be original page or overflow page
   bool* curr_page_dirty = &orig_page_dirty;
 
-  auto write_dirty_pages = [&, segment_base = segment.lower,
-                            sinfo = segment.sinfo]() {
+  auto write_dirty_pages = [&, segment_base = segment.lower]() {
     // Write out overflow first to avoid dangling overflow pointers.
     /*
      * No overflow page in my implementation. -- DU Zelin
@@ -345,11 +352,17 @@ size_t Manager::WriteToSegment(
     if (overflow_page_dirty) {
       WritePage(overflow_page_id, 0, overflow_page_buf);
     }
-    if (*curr_page_dirty) {
-      // modified_page_idxes.push_back(curr_page_idx); // Record the dirty page number, and its corresponding bit in the mapping table should be reversed.
-      curr_phy_page_idx = sinfo->GetPhyPage(curr_page_idx);
-      WritePage(sinfo->id(), curr_phy_page_idx, orig_page_buf); // Write the dirty page to the backup slot in the segment.
-      sinfo->UpadteBitMappingTable(curr_page_idx); // Update the in-memory mapping table
+    if (orig_page_dirty) {
+      WritePage(segment.sinfo.id(), curr_backup_page_idx, orig_page_buf); // Write the dirty page to the backup slot in the segment.
+      index_->RunShared([&](auto& raw_index, auto& current_version) {
+        if (segment.index_version != current_version) { // The index_ has been updated and the sinfo has been moved.
+          auto it = raw_index.find(segment_base);
+          segment.sinfop = const_cast<SegmentInfo*>(&it->second);
+          segment.index_version = current_version;
+        }
+        // curr_phy_page_idx = segment.sinfop->GetBackupPage(curr_page_idx);
+        segment.sinfop->UpdateBitMappingTable(curr_page_idx); // Update the in-memory mapping table
+      });
     }
   };
   auto write_record_to_chain = [&](Key key, const Slice& value) {
@@ -413,31 +426,48 @@ size_t Manager::WriteToSegment(
       return false;
     }
   };
-
-  curr_page_idx =
-      segment.sinfo->PageForKey(segment.lower, records[start_idx].first); // Get the logical page number for the first record.
-  lock_manager_->AcquirePageLock(segment.sinfo->id(), curr_page_idx,
-                                 PageMode::kWrite); // TODO: change the lock mode
-  curr_phy_page_idx = segment.sinfo->GetPhyPage(curr_page_idx); // Translate the logical page number to physical page number.
-  ReadPage(segment.sinfo->id(), curr_phy_page_idx, orig_page_buf); // Read the physical page into memory buffer.
+  // auto release_page_locks = [&](){
+  //   for (auto& page_idx : modified_page_idxes) {
+  //     lock_manager_->ReleasePageLock(segment.sinfo.id(), page_idx, PageMode::kWrite);
+  //   }
+  // };
+  curr_page_idx = segment.sinfo.PageForKey(segment.lower, records[start_idx].first); // Get the logical page number for the first record.
+  lock_manager_->AcquirePageLock(segment.sinfo.id(), curr_page_idx, PageMode::kWrite);
+  // modified_page_idxes.push_back(curr_page_idx); // Record the dirty page number, and its corresponding bit in the mapping table should be reversed.
+  index_->RunShared([&](auto& raw_index, auto& current_version) {
+    if (segment.index_version != current_version) { // The index_ has been updated and the sinfo has been moved.
+      auto it = raw_index.find(segment.lower);
+      segment.sinfop = const_cast<SegmentInfo*>(&it->second);
+      segment.index_version = current_version;
+    }
+    curr_phy_page_idx = segment.sinfop->GetPhyPage(curr_page_idx); // Translate the logical page number to physical page number.
+    curr_backup_page_idx = segment.sinfop->GetBackupPage(curr_page_idx);
+  });
+  ReadPage(segment.sinfo.id(), curr_phy_page_idx, orig_page_buf); // Read the physical page into memory buffer.
 
   for (size_t i = start_idx; i < end_idx; ++i) {
-    const size_t page_idx =
-        segment.sinfo->PageForKey(segment.lower, records[i].first);
+    const size_t page_idx = segment.sinfo.PageForKey(segment.lower, records[i].first);
     if (page_idx != curr_page_idx) { // If we scan the records vector to the next page
       write_dirty_pages();
-      lock_manager_->ReleasePageLock(segment.sinfo->id(), curr_page_idx,
-                                     PageMode::kWrite); // TODO: change the lock mode
+      lock_manager_->ReleasePageLock(segment.sinfo.id(), curr_page_idx, PageMode::kWrite);
       // Update the current page.
       curr_page_idx = page_idx;
-      curr_phy_page_idx = segment.sinfo->GetPhyPage(curr_page_idx); // Translate the logical page number to physical page number.
-      lock_manager_->AcquirePageLock(segment.sinfo->id(), curr_page_idx,
-                                     PageMode::kWrite); // TODO: this lock should be removed.
-      ReadPage(segment.sinfo->id(), curr_phy_page_idx, orig_page_buf); // Read the physical page into memory buffer.
+      lock_manager_->AcquirePageLock(segment.sinfo.id(), curr_page_idx, PageMode::kWrite);
+      // modified_page_idxes.push_back(curr_page_idx); // Record the dirty page number, and its corresponding bit in the mapping table should be reversed.
+      index_->RunShared([&](auto& raw_index, auto& current_version) {
+        if (segment.index_version != current_version) { // The index_ has been updated and the sinfo has been moved.
+          auto it = raw_index.find(segment.lower);
+          segment.sinfop = const_cast<SegmentInfo*>(&it->second);
+          segment.index_version = current_version;
+        }
+        curr_phy_page_idx = segment.sinfop->GetPhyPage(curr_page_idx); // Translate the logical page number to physical page number.
+        curr_backup_page_idx = segment.sinfop->GetBackupPage(curr_page_idx);
+      });
+      ReadPage(segment.sinfo.id(), curr_phy_page_idx, orig_page_buf); // Read the physical page into memory buffer.
       overflow_page_id = SegmentId(); // Initialize the overflow page id to a invalid value.
       orig_page_dirty = false;
       overflow_page_dirty = false;
-      curr_page = &orig_page; // Make the curr_page points to the original page
+      curr_page = &orig_page; // Make the curr_page points to the original page buffer.
       curr_page_dirty = &orig_page_dirty;
     }
 
@@ -445,9 +475,9 @@ size_t Manager::WriteToSegment(
         write_record_to_chain(records[i].first, records[i].second);
     if (!succeeded) {
       write_dirty_pages();
-      lock_manager_->ReleasePageLock(segment.sinfo->id(), curr_page_idx,
-                                     PageMode::kWrite);
-      lock_manager_->ReleaseSegmentLock(segment.sinfo->id(),
+      // release_page_locks();
+      lock_manager_->ReleasePageLock(segment.sinfo.id(), curr_page_idx, PageMode::kWrite);
+      lock_manager_->ReleaseSegmentLock(segment.sinfo.id(),
                                         SegmentMode::kPageWrite);
       // The segment is full. We need to rewrite it in order to merge in the
       // writes.
@@ -472,31 +502,52 @@ size_t Manager::WriteToSegment(
    *  Load the tail page of the segment into memory buffer
    * Modify the mapping table section before flushing it to the disk. 
   */
-  if (curr_page_idx != segment.sinfo->page_count()) {
+  size_t last_page_idx = segment.sinfo.page_count() - 1;
+  uint32_t new_mappings = 0;
+  uint32_t new_version = 0;
+  if (curr_page_idx != last_page_idx) {
     write_dirty_pages();
-    lock_manager_->ReleasePageLock(segment.sinfo->id(), curr_page_idx,
-                                PageMode::kWrite); // TODO: change the lock mode
-    curr_page_idx = segment.sinfo->page_count();
-    curr_phy_page_idx = segment.sinfo->GetPhyPage(curr_page_idx);
-    lock_manager_->AcquirePageLock(segment.sinfo->id(), curr_page_idx,
-                                     PageMode::kWrite); // TODO: this lock should be removed.
-    ReadPage(segment.sinfo->id(), curr_phy_page_idx, orig_page_buf);
-    orig_page_dirty = false;
-    curr_page = &orig_page;
+    lock_manager_->ReleasePageLock(segment.sinfo.id(), curr_page_idx, PageMode::kWrite);
+    curr_page_idx = last_page_idx;
+    lock_manager_->AcquirePageLock(segment.sinfo.id(), curr_page_idx, PageMode::kWrite);
+    // modified_page_idxes.push_back(curr_page_idx); // Record the dirty page number, and its corresponding bit in the mapping table should be reversed.
+    index_->RunShared([&](auto& raw_index, auto& current_version) {
+        if (segment.index_version != current_version) { // The index_ has been updated and the sinfo has been moved.
+          auto it = raw_index.find(segment.lower);
+          segment.sinfop = const_cast<SegmentInfo*>(&it->second);
+          segment.index_version = current_version;
+        }
+        curr_phy_page_idx = segment.sinfop->GetPhyPage(curr_page_idx); // Translate the logical page number to physical page number.
+        curr_backup_page_idx = segment.sinfop->GetBackupPage(curr_page_idx);
+        new_mappings = segment.sinfop->UpadteBitMappingTableTmp(curr_page_idx);
+        new_version = segment.sinfop->BindNewVersion();
+    });
+    ReadPage(segment.sinfo.id(), curr_phy_page_idx, orig_page_buf);
+  } else {
+    index_->RunShared([&](auto& raw_index, auto& current_version) {
+        if (segment.index_version != current_version) { // The index_ has been updated and the sinfo has been moved.
+          auto it = raw_index.find(segment.lower);
+          segment.sinfop = const_cast<SegmentInfo*>(&it->second);
+          segment.index_version = current_version;
+        }
+        new_mappings = segment.sinfop->UpadteBitMappingTableTmp(curr_page_idx);
+        new_version = segment.sinfop->BindNewVersion();
+    });
   }
-  
-  uint32_t mappings = segment.sinfo->UpadteBitMappingTableTmp(curr_page_idx);
-  curr_page->SetMappingTable(mappings);
-  curr_phy_page_idx = segment.sinfo->GetBackupPage(curr_page_idx);
-  segment.sinfo->BindNewVersion();
-  uint32_t versionnum = segment.sinfo->GetVersionNum();
-  curr_page->SetVersionNum(versionnum);
-  WritePage(segment.sinfo->id(), curr_phy_page_idx, orig_page_buf); // Write the dirty page to the backup slot in the segment.
-  segment.sinfo->UpadteBitMappingTable(curr_page_idx); // Update the in-memory mapping table
-
-  lock_manager_->ReleasePageLock(segment.sinfo->id(), curr_page_idx,
-                                 PageMode::kWrite); // TODO: modify the lock mode.
-  lock_manager_->ReleaseSegmentLock(segment.sinfo->id(),
+  orig_page.SetMappingTable(new_mappings);
+  orig_page.SetVersionNum(new_version);
+  WritePage(segment.sinfo.id(), curr_backup_page_idx, orig_page_buf); // Write the dirty page to the backup slot in the segment.
+  index_->RunShared([&](auto& raw_index, auto& current_version) {
+        if (segment.index_version != current_version) { // The index_ has been updated and the sinfo has been moved.
+          auto it = raw_index.find(segment.lower);
+          segment.sinfop = const_cast<SegmentInfo*>(&it->second);
+          segment.index_version = current_version;
+        }
+        segment.sinfop->UpdateBitMappingTable(curr_page_idx);
+    });
+  // release_page_locks();
+  lock_manager_->ReleasePageLock(segment.sinfo.id(), curr_page_idx, PageMode::kWrite);
+  lock_manager_->ReleaseSegmentLock(segment.sinfo.id(),
                                     SegmentMode::kPageWrite);
 
   // All the records were successfully written.
@@ -551,26 +602,26 @@ void Manager::ReadOverflows(
 
 std::pair<Key, Key> Manager::GetPageBoundsFor(const Key key) const {
   const auto seg = index_->SegmentForKey(key);
-  const size_t page_idx = seg.sinfo->PageForKey(seg.lower, key);
+  const size_t page_idx = seg.sinfo.PageForKey(seg.lower, key);
 
   // Find the lower boundary. When `page_idx == 0` it is always the segment's
   // base key.
   Key lower_bound = seg.lower;
   if (page_idx > 0) {
-    assert(seg.sinfo->page_count() > 1);
-    lower_bound = FindLowerBoundary(seg.lower, *(seg.sinfo->model()),
-                                    seg.sinfo->page_count(),
-                                    seg.sinfo->model()->Invert(), page_idx);
+    assert(seg.sinfo.page_count() > 1);
+    lower_bound = FindLowerBoundary(seg.lower, *(seg.sinfo.model()),
+                                    seg.sinfo.page_count(),
+                                    seg.sinfo.model()->Invert(), page_idx);
   }
 
   // Find upper boundary (exclusive).
   Key upper_bound = std::numeric_limits<Key>::max();
-  if (page_idx < seg.sinfo->page_count() - 1) {
+  if (page_idx < seg.sinfo.page_count() - 1) {
     // `page_idx` is not the last page in the segment. Thus its upper boundary
     // is the lower boundary of the next page.
-    upper_bound = FindLowerBoundary(seg.lower, *(seg.sinfo->model()),
-                                    seg.sinfo->page_count(),
-                                    seg.sinfo->model()->Invert(), page_idx + 1);
+    upper_bound = FindLowerBoundary(seg.lower, *(seg.sinfo.model()),
+                                    seg.sinfo.page_count(),
+                                    seg.sinfo.model()->Invert(), page_idx + 1);
 
   } else {
     // `page_idx` is the last page in the segment. Its upper boundary is the

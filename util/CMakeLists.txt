@@ -1,4 +1,4 @@
-target_sources(treeline PRIVATE
+target_sources(treeline_cow PRIVATE
   affinity.h
   arena.cc
   arena.h

@@ -161,6 +161,7 @@ bool Page::HasOverflow() const { return GetOverflow().IsValid(); }
 // Single-page Segments:
 // - Overflow page ID  (8 B)
 // - Sequence number   (4 B)
+// - empty slot        (4 B)
 // - Mapping table     (4 B)
 // - version number    (4 B)
 //
@@ -178,6 +179,7 @@ bool Page::HasOverflow() const { return GetOverflow().IsValid(); }
 //
 // Multi-page Segments (Last Page)
 // - Overflow page ID  (8 B)
+// - empty slot        (4 B)
 // - empty slot        (4 B)
 // - Mapping table     (4 B)
 // - version number    (4 B)
@@ -229,22 +231,22 @@ void Page::SetChecksum(uint32_t checksum) {
 
 uint32_t Page::GetMappingTable() const { 
   const uint32_t* mappings = reinterpret_cast<const uint32_t*>(AsMapPtr(data_)->GetScratch());
-  return mappings[3];
+  return mappings[4];
 }
 
 void Page::SetMappingTable(uint32_t mapping) {
   uint32_t* mappings = reinterpret_cast<uint32_t*>(AsMapPtr(data_)->GetScratch());
-  mappings[3] = mapping;
+  mappings[4] = mapping;
 }
 
 uint32_t Page::GetVersionNum() const { 
   const uint32_t* versionnums = reinterpret_cast<const uint32_t*>(AsMapPtr(data_)->GetScratch());
-  return versionnums[4];
+  return versionnums[5];
 }
 
 void Page::SetVersionNum(uint32_t version) {
   uint32_t* versionnums = reinterpret_cast<uint32_t*>(AsMapPtr(data_)->GetScratch());
-  versionnums[4] = version;
+  versionnums[5] = version;
 }
 
 // Check whether this is a valid Page (as opposed to a Page-sized

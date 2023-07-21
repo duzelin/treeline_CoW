@@ -40,10 +40,10 @@ Status Manager::ScanWithEstimates(
   // key.
   size_t est_start_pages_to_read = 1;
   size_t start_page_idx = 0;
-  const size_t first_segment_page_count = start_seg.sinfo->page_count();
+  const size_t first_segment_page_count = start_seg.sinfo.page_count();
   if (first_segment_page_count > 1) {
     const double pos = std::max(
-        0.0, start_seg.sinfo->model()->operator()(start_key - start_seg.lower));
+        0.0, start_seg.sinfo.model()->operator()(start_key - start_seg.lower));
     const size_t page_idx = static_cast<size_t>(pos);
     if (page_idx >= first_segment_page_count) {
       // Edge case due to numeric errors.
@@ -78,13 +78,13 @@ Status Manager::ScanWithEstimates(
   // actual read.
   for (size_t page_idx = start_page_idx;
        page_idx < start_page_idx + est_start_pages_to_read; ++page_idx) {
-    lock_manager_->AcquirePageLock(start_seg.sinfo->id(), page_idx,
+    lock_manager_->AcquirePageLock(start_seg.sinfo.id(), page_idx,
                                    PageMode::kShared);
   }
   const std::unique_ptr<SegmentFile>& sf =
-      segment_files_[start_seg.sinfo->id().GetFileId()];
+      segment_files_[start_seg.sinfo.id().GetFileId()];
   const size_t segment_byte_offset =
-      start_seg.sinfo->id().GetOffset() * Page::kSize;
+      start_seg.sinfo.id().GetOffset() * Page::kSize;
   sf->ReadPages(segment_byte_offset + start_page_idx * Page::kSize,
                 w_.buffer().get(), est_start_pages_to_read);
   w_.BumpReadCount(est_start_pages_to_read);
@@ -109,7 +109,7 @@ Status Manager::ScanWithEstimates(
     values_out->emplace_back(key_utils::ExtractHead64(pmi.key()),
                              pmi.value().ToString());
   }
-  lock_manager_->ReleasePageLock(start_seg.sinfo->id(), start_page_idx,
+  lock_manager_->ReleasePageLock(start_seg.sinfo.id(), start_page_idx,
                                  PageMode::kShared);
 
   // Common code used to scan a whole page.
@@ -135,7 +135,7 @@ Status Manager::ScanWithEstimates(
     Page page(w_.buffer().get() +
               (start_seg_page_idx - start_page_idx) * Page::kSize);
     scan_page(page);
-    lock_manager_->ReleasePageLock(start_seg.sinfo->id(), start_seg_page_idx,
+    lock_manager_->ReleasePageLock(start_seg.sinfo.id(), start_seg_page_idx,
                                    PageMode::kShared);
     ++start_seg_page_idx;
   }
@@ -143,7 +143,7 @@ Status Manager::ScanWithEstimates(
   // happen if `records_left == 0` before scanning all the read-in pages).
   for (; start_seg_page_idx < (start_page_idx + est_start_pages_to_read);
        ++start_seg_page_idx) {
-    lock_manager_->ReleasePageLock(start_seg.sinfo->id(), start_seg_page_idx,
+    lock_manager_->ReleasePageLock(start_seg.sinfo.id(), start_seg_page_idx,
                                    PageMode::kShared);
   }
 
@@ -151,36 +151,36 @@ Status Manager::ScanWithEstimates(
   // first segment.
   while (records_left > 0 && start_seg_page_idx < first_segment_page_count) {
     // Read 1 page at a time.
-    lock_manager_->AcquirePageLock(start_seg.sinfo->id(), start_seg_page_idx,
+    lock_manager_->AcquirePageLock(start_seg.sinfo.id(), start_seg_page_idx,
                                    PageMode::kShared);
     sf->ReadPages(segment_byte_offset + start_seg_page_idx * Page::kSize,
                   w_.buffer().get(), /*num_pages=*/1);
     w_.BumpReadCount(1);
     Page page(w_.buffer().get());
     scan_page(page);
-    lock_manager_->ReleasePageLock(start_seg.sinfo->id(), start_seg_page_idx,
+    lock_manager_->ReleasePageLock(start_seg.sinfo.id(), start_seg_page_idx,
                                    PageMode::kShared);
     ++start_seg_page_idx;
   }
 
   if (records_left == 0) {
     // No need to scan the next segment.
-    lock_manager_->ReleaseSegmentLock(start_seg.sinfo->id(),
+    lock_manager_->ReleaseSegmentLock(start_seg.sinfo.id(),
                                       SegmentMode::kPageRead);
     return Status::OK();
   }
 
   // 4. Now keep scanning forward as far as needed.
-  SegmentId prev_seg_id = start_seg.sinfo->id();
+  SegmentId prev_seg_id = start_seg.sinfo.id();
   std::optional<SegmentIndex::Entry> curr_seg =
       index_->NextSegmentForKeyWithLock(start_seg.lower,
                                         SegmentMode::kPageRead);
   while (records_left > 0 && curr_seg.has_value()) {
     lock_manager_->ReleaseSegmentLock(prev_seg_id, SegmentMode::kPageRead);
 
-    const size_t seg_page_count = curr_seg->sinfo->page_count();
+    const size_t seg_page_count = curr_seg->sinfo.page_count();
     const size_t seg_byte_offset =
-        curr_seg->sinfo->id().GetOffset() * Page::kSize;
+        curr_seg->sinfo.id().GetOffset() * Page::kSize;
     const size_t est_pages_left = std::ceil(
         records_left / static_cast<double>(options_.records_per_page_goal));
 
@@ -189,11 +189,11 @@ Status Manager::ScanWithEstimates(
     // all the records in the segment.
     const size_t pages_to_read = std::min(seg_page_count, est_pages_left);
     for (size_t page_idx = 0; page_idx < pages_to_read; ++page_idx) {
-      lock_manager_->AcquirePageLock(curr_seg->sinfo->id(), page_idx,
+      lock_manager_->AcquirePageLock(curr_seg->sinfo.id(), page_idx,
                                      PageMode::kShared);
     }
     const std::unique_ptr<SegmentFile>& sf =
-        segment_files_[curr_seg->sinfo->id().GetFileId()];
+        segment_files_[curr_seg->sinfo.id().GetFileId()];
     sf->ReadPages(seg_byte_offset, w_.buffer().get(), pages_to_read);
     w_.BumpReadCount(pages_to_read);
 
@@ -201,20 +201,20 @@ Status Manager::ScanWithEstimates(
     while (records_left > 0 && page_idx < pages_to_read) {
       Page page(w_.buffer().get() + page_idx * Page::kSize);
       scan_page(page);
-      lock_manager_->ReleasePageLock(curr_seg->sinfo->id(), page_idx,
+      lock_manager_->ReleasePageLock(curr_seg->sinfo.id(), page_idx,
                                      PageMode::kShared);
       ++page_idx;
     }
     // Release any page locks that were not released by the loop above.
     for (; page_idx < pages_to_read; ++page_idx) {
-      lock_manager_->ReleasePageLock(curr_seg->sinfo->id(), page_idx,
+      lock_manager_->ReleasePageLock(curr_seg->sinfo.id(), page_idx,
                                      PageMode::kShared);
     }
 
     // If we underestimated and need to read a few more pages from this
     // segment.
     while (records_left > 0 && page_idx < seg_page_count) {
-      lock_manager_->AcquirePageLock(curr_seg->sinfo->id(), page_idx,
+      lock_manager_->AcquirePageLock(curr_seg->sinfo.id(), page_idx,
                                      PageMode::kShared);
       // Read 1 page at a time.
       sf->ReadPages(seg_byte_offset + page_idx * Page::kSize, w_.buffer().get(),
@@ -222,14 +222,14 @@ Status Manager::ScanWithEstimates(
       w_.BumpReadCount(1);
       Page page(w_.buffer().get());
       scan_page(page);
-      lock_manager_->ReleasePageLock(curr_seg->sinfo->id(), page_idx,
+      lock_manager_->ReleasePageLock(curr_seg->sinfo.id(), page_idx,
                                      PageMode::kShared);
       ++page_idx;
     }
 
     // Go to the next segment. To avoid an unnecessary lock acquisiton, we check
     // first if we need more records.
-    prev_seg_id = curr_seg->sinfo->id();
+    prev_seg_id = curr_seg->sinfo.id();
     if (records_left > 0) {
       curr_seg = index_->NextSegmentForKeyWithLock(curr_seg->lower,
                                                    SegmentMode::kPageRead);
@@ -263,17 +263,17 @@ Status Manager::ScanWhole(
 
   // 2. Read the first segment.
   const std::unique_ptr<SegmentFile>& sf =
-      segment_files_[start_seg.sinfo->id().GetFileId()];
-  const size_t first_segment_size = start_seg.sinfo->page_count();
+      segment_files_[start_seg.sinfo.id().GetFileId()];
+  const size_t first_segment_size = start_seg.sinfo.page_count();
   const size_t segment_byte_offset =
-      start_seg.sinfo->id().GetOffset() * Page::kSize;
+      start_seg.sinfo.id().GetOffset() * Page::kSize;
   size_t start_segment_page_idx =
-      start_seg.sinfo->PageForKey(start_seg.lower, start_key);
+      start_seg.sinfo.PageForKey(start_seg.lower, start_key);
   // We read the whole segment but start scanning from `start_segment_page_idx`.
   // So we only need page locks starting from this index.
   for (size_t page_idx = start_segment_page_idx; page_idx < first_segment_size;
        ++page_idx) {
-    lock_manager_->AcquirePageLock(start_seg.sinfo->id(), page_idx,
+    lock_manager_->AcquirePageLock(start_seg.sinfo.id(), page_idx,
                                    PageMode::kShared);
   }
   sf->ReadPages(segment_byte_offset, w_.buffer().get(), first_segment_size);
@@ -299,7 +299,7 @@ Status Manager::ScanWhole(
     values_out->emplace_back(key_utils::ExtractHead64(pmi.key()),
                              pmi.value().ToString());
   }
-  lock_manager_->ReleasePageLock(start_seg.sinfo->id(), start_segment_page_idx,
+  lock_manager_->ReleasePageLock(start_seg.sinfo.id(), start_segment_page_idx,
                                  PageMode::kShared);
 
   // Common code used to scan a whole page.
@@ -323,7 +323,7 @@ Status Manager::ScanWhole(
   while (records_left > 0 && start_segment_page_idx < first_segment_size) {
     Page page(w_.buffer().get() + start_segment_page_idx * Page::kSize);
     scan_page(page);
-    lock_manager_->ReleasePageLock(start_seg.sinfo->id(), start_segment_page_idx,
+    lock_manager_->ReleasePageLock(start_seg.sinfo.id(), start_segment_page_idx,
                                    PageMode::kShared);
     ++start_segment_page_idx;
   }
@@ -331,36 +331,36 @@ Status Manager::ScanWhole(
   // happen if `records_left == 0` before scanning all the read-in pages).
   for (; start_segment_page_idx < first_segment_size;
        ++start_segment_page_idx) {
-    lock_manager_->ReleasePageLock(start_seg.sinfo->id(), start_segment_page_idx,
+    lock_manager_->ReleasePageLock(start_seg.sinfo.id(), start_segment_page_idx,
                                    PageMode::kShared);
   }
 
   // No more records needed. Return early.
   if (records_left == 0) {
-    lock_manager_->ReleaseSegmentLock(start_seg.sinfo->id(),
+    lock_manager_->ReleaseSegmentLock(start_seg.sinfo.id(),
                                       SegmentMode::kPageRead);
     return Status::OK();
   }
 
   // 5. Scan forward until we read enough records or run out of segments to
   //    read.
-  SegmentId prev_seg_id = start_seg.sinfo->id();
+  SegmentId prev_seg_id = start_seg.sinfo.id();
   std::optional<SegmentIndex::Entry> curr_seg =
       index_->NextSegmentForKeyWithLock(start_seg.lower,
                                         SegmentMode::kPageRead);
   while (records_left > 0 && curr_seg.has_value()) {
     lock_manager_->ReleaseSegmentLock(prev_seg_id, SegmentMode::kPageRead);
 
-    const size_t seg_page_count = curr_seg->sinfo->page_count();
+    const size_t seg_page_count = curr_seg->sinfo.page_count();
     const size_t seg_byte_offset =
-        curr_seg->sinfo->id().GetOffset() * Page::kSize;
+        curr_seg->sinfo.id().GetOffset() * Page::kSize;
 
     for (size_t page_idx = 0; page_idx < seg_page_count; ++page_idx) {
-      lock_manager_->AcquirePageLock(curr_seg->sinfo->id(), page_idx,
+      lock_manager_->AcquirePageLock(curr_seg->sinfo.id(), page_idx,
                                      PageMode::kShared);
     }
     const std::unique_ptr<SegmentFile>& sf =
-        segment_files_[curr_seg->sinfo->id().GetFileId()];
+        segment_files_[curr_seg->sinfo.id().GetFileId()];
     sf->ReadPages(seg_byte_offset, w_.buffer().get(), seg_page_count);
     w_.BumpReadCount(seg_page_count);
 
@@ -368,18 +368,18 @@ Status Manager::ScanWhole(
     while (records_left > 0 && page_idx < seg_page_count) {
       Page page(w_.buffer().get() + page_idx * Page::kSize);
       scan_page(page);
-      lock_manager_->ReleasePageLock(curr_seg->sinfo->id(), page_idx,
+      lock_manager_->ReleasePageLock(curr_seg->sinfo.id(), page_idx,
                                      PageMode::kShared);
       ++page_idx;
     }
     // Release any page locks that were not released by the loop above.
     for (; page_idx < seg_page_count; ++page_idx) {
-      lock_manager_->ReleasePageLock(curr_seg->sinfo->id(), page_idx,
+      lock_manager_->ReleasePageLock(curr_seg->sinfo.id(), page_idx,
                                      PageMode::kShared);
     }
 
     // Go to the next segment.
-    prev_seg_id = curr_seg->sinfo->id();
+    prev_seg_id = curr_seg->sinfo.id();
     if (records_left > 0) {
       curr_seg = index_->NextSegmentForKeyWithLock(curr_seg->lower,
                                                    SegmentMode::kPageRead);

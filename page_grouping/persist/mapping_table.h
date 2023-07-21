@@ -32,11 +32,11 @@ class MappingTable {
     void SetVersion(uint32_t version_num) { version_num_.store(version_num); }
     uint32_t GetValue() const { return mappings_.load(); }
     uint32_t GetVersion() const { return version_num_.load(); }
-    void ReversePages(std::vector<uint32_t>& ModifiedPages) {
+    uint32_t ReversePages(std::vector<uint32_t>& ModifiedPages) {
         bool exchanged = false;
+        uint32_t new_mappings = 0;
         while (!exchanged) {
             uint32_t ori_mappings = mappings_.load(); 
-            uint32_t new_mappings = 0;
             uint32_t reverse_mask = 0;
             for (auto& page : ModifiedPages) {
                 reverse_mask |= (1 << page);
@@ -44,21 +44,24 @@ class MappingTable {
             new_mappings = ori_mappings ^ reverse_mask;
             exchanged = mappings_.compare_exchange_strong(ori_mappings, new_mappings);
         }
+        return new_mappings;
     }
-    void ReversePage(uint32_t ModifiedPage) {
+    uint32_t ReversePage(uint32_t ModifiedPage) {
         bool exchanged = false;
+        uint32_t new_mappings = 0;
         while (!exchanged) {
-            uint32_t ori_mappings = mappings_.load(); 
-            uint32_t new_mappings = 0;
-            uint32_t reverse_mask = (1 << ModifiedPage);
+            uint32_t ori_mappings = mappings_.load();
+            uint32_t reverse_mask = 0; 
+            reverse_mask = (1 << ModifiedPage);
             new_mappings = ori_mappings ^ reverse_mask;
             exchanged = mappings_.compare_exchange_strong(ori_mappings, new_mappings);
         }
+        return new_mappings;
     }
     uint32_t ReversePageTmp(uint32_t ModifiedPage) {
         uint32_t mappings_tmp_ = mappings_.load();
         uint32_t reverse_mask = (1 << ModifiedPage);
-        mappings_tmp_ ^= mappings_tmp_ | reverse_mask;
+        mappings_tmp_ = mappings_tmp_ ^ reverse_mask;
         return mappings_tmp_;
     }
     // Translate loggical page number to physical page number.
@@ -75,8 +78,13 @@ class MappingTable {
         return (mappings & (1 << LogPageNum)) ? LogPageNum: (LogPageNum + SegmentLength);
     }
 
-    void BindingNewVersion() {
-        version_num_.fetch_add(1);
+    uint32_t GetOverflowPageNum(uint32_t LogPageNum) const{
+        uint32_t mappings = mappings_.load();
+        return (mappings & (1 << LogPageNum + 16) ? 1 : 0);
+    }
+
+    uint32_t BindingNewVersion() {
+        return (++version_num_);
     }
 
     private:

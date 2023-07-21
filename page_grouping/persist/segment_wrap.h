@@ -15,6 +15,8 @@ class SegmentWrap {
  public:
   SegmentWrap(void* data, const size_t pages_in_segment);
 
+  void SetMappingTable(uint32_t mappings);
+
   uint32_t GetSequenceNumber() const;
   void SetSequenceNumber(uint32_t sequence);
 

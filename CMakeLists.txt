@@ -17,22 +17,22 @@ find_library(tbb tbb)
 
 # The TreeLine embedded database library targets
 if (TL_BUILD_SHARED)
-  add_library(treeline SHARED)
-  add_library(pg_treeline SHARED)
+  add_library(treeline_cow SHARED)
+  add_library(pg_treeline_cow SHARED)
 else()
-  add_library(treeline STATIC)
-  add_library(pg_treeline STATIC)
+  add_library(treeline_cow STATIC)
+  add_library(pg_treeline_cow STATIC)
 endif()
 
 # Load any third party dependencies
 add_subdirectory(third_party)
 
-target_link_libraries(treeline PRIVATE crc32c tbb masstree)
-target_link_libraries(pg_treeline PRIVATE crc32c tbb masstree)
-target_include_directories(treeline
+target_link_libraries(treeline_cow PRIVATE crc32c tbb masstree)
+target_link_libraries(pg_treeline_cow PRIVATE crc32c tbb masstree)
+target_include_directories(treeline_cow
   PUBLIC include
   PRIVATE .)
-target_include_directories(pg_treeline
+target_include_directories(pg_treeline_cow
   PUBLIC include
   PRIVATE .)
 
@@ -46,7 +46,7 @@ set(treeline_api
   ${treeline_inc}/statistics.h
   ${treeline_inc}/status.h
 )
-target_sources(treeline PUBLIC ${treeline_api})
+target_sources(treeline_cow PUBLIC ${treeline_api})
 set(pg_treeline_api
   ${treeline_inc}/pg_db.h
   ${treeline_inc}/pg_options.h
@@ -54,7 +54,7 @@ set(pg_treeline_api
   ${treeline_inc}/slice.h
   ${treeline_inc}/status.h
 )
-target_sources(pg_treeline PUBLIC ${pg_treeline_api})
+target_sources(pg_treeline_cow PUBLIC ${pg_treeline_api})
 
 # Add our sources by traversing the repository
 add_subdirectory(bufmgr)

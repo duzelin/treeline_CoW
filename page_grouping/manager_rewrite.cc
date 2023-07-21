@@ -154,14 +154,14 @@ namespace pg {
 Status Manager::RewriteSegments(
     Key segment_base, std::vector<Record>::const_iterator addtl_rec_begin,
     std::vector<Record>::const_iterator addtl_rec_end) {
-  std::vector<SegmentIndex::Entry> segments_to_rewrite;
+  std::vector<SegmentIndex::EntryP> segments_to_rewrite;
 
   if (options_.rewrite_search_radius > 0) {
     segments_to_rewrite = index_->FindAndLockRewriteRegion(
         segment_base, options_.rewrite_search_radius);
   } else {
     segments_to_rewrite.emplace_back(
-        index_->SegmentForKeyWithLock(segment_base, SegmentMode::kReorg));
+        index_->SegmentForKeyWithLockP(segment_base, SegmentMode::kReorg));
   }
 
   // Verify that the segments can still be rewritten after we have acquired the
@@ -174,7 +174,7 @@ Status Manager::RewriteSegments(
                             segments_to_rewrite.back().upper, addtl_rec_begin,
                             addtl_rec_end)) {
     for (const auto& seg : segments_to_rewrite) {
-      lock_manager_->ReleaseSegmentLock(seg.sinfo->id(), SegmentMode::kReorg);
+      lock_manager_->ReleaseSegmentLock(seg.sinfo.id(), SegmentMode::kReorg);
     }
     return Status::InvalidArgument(
         "RewriteSegments(): Intervening rewrite altered the segment "
@@ -186,7 +186,7 @@ Status Manager::RewriteSegments(
 }
 
 Status Manager::RewriteSegmentsImpl(
-    std::vector<SegmentIndex::Entry> segments_to_rewrite,
+    std::vector<SegmentIndex::EntryP> segments_to_rewrite,
     std::vector<Record>::const_iterator addtl_rec_begin,
     std::vector<Record>::const_iterator addtl_rec_end) {
   std::vector<std::pair<Key, SegmentInfo>> rewritten_segments;
@@ -194,7 +194,7 @@ Status Manager::RewriteSegmentsImpl(
   // Track rewrite statistics.
   PageGroupedDBStats::Local().BumpRewrites();
   for (const auto& seg : segments_to_rewrite) {
-    PageGroupedDBStats::Local().BumpRewriteInputPages(seg.sinfo->page_count());
+    PageGroupedDBStats::Local().BumpRewriteInputPages(seg.sinfo.page_count());
   }
 
   // 2. Load and merge the segments.
@@ -241,7 +241,7 @@ Status Manager::RewriteSegmentsImpl(
   if (forecast_exists) {
     size_t current_pages = 0;
     for (auto& seg : segments_to_rewrite) {
-      current_pages += seg.sinfo->page_count();
+      current_pages += seg.sinfo.page_count();
     }
 
     // The default parameter combination must be viable for counting the max
@@ -367,8 +367,8 @@ Status Manager::RewriteSegmentsImpl(
         }
       };
 
-  for (const auto& seg_to_rewrite : segments_to_rewrite) {
-    const size_t segment_pages = seg_to_rewrite.sinfo->page_count();
+  for (auto& seg_to_rewrite : segments_to_rewrite) {
+    const size_t segment_pages = seg_to_rewrite.sinfo.page_count();
     if (segment_pages > page_buf.NumFreePages()) {
       // Not enough memory to read the next segment. Flush the
       // currently-being-built segment to disk.
@@ -379,8 +379,16 @@ Status Manager::RewriteSegmentsImpl(
     }
 
     // Load the segment and check for overflows.
-    ReadSegment(seg_to_rewrite.sinfo->id());
-    SegmentWrap sw(w_.buffer().get(), seg_to_rewrite.sinfo->page_count());
+    ReadSegment(seg_to_rewrite.sinfo.id());
+    SegmentWrap sw(w_.buffer().get(), seg_to_rewrite.sinfo.page_count());
+    index_->RunShared([&](auto& raw_index, auto& current_version) {
+        if (seg_to_rewrite.index_version != current_version) { // The index_ has been updated and the sinfo has been moved.
+          auto it = raw_index.find(seg_to_rewrite.lower);
+          seg_to_rewrite.sinfop = const_cast<SegmentInfo*>(&it->second);
+          seg_to_rewrite.index_version = current_version;
+        }
+        sw.SetMappingTable(seg_to_rewrite.sinfop->GetMappingValue());
+      });
     const size_t num_overflows = sw.NumOverflows();
     if (segment_pages + num_overflows > page_buf.NumFreePages()) {
       // Not enough memory to read the next segment's overflows. Flush the
@@ -455,7 +463,7 @@ Status Manager::RewriteSegmentsImpl(
   // The new segments have now been rewritten. Upgrade to exclusive mode before
   // exposing the new segments.
   for (const auto& seg : segments_to_rewrite) {
-    lock_manager_->UpgradeSegmentLockToReorgExclusive(seg.sinfo->id());
+    lock_manager_->UpgradeSegmentLockToReorgExclusive(seg.sinfo.id());
   }
 
   // 3. For crash consistency, we need to invalidate at least one of the old
@@ -471,7 +479,7 @@ Status Manager::RewriteSegmentsImpl(
     write_futures.reserve(segments_to_rewrite.size() +
                           overflows_to_clear.size());
     for (const auto& seg_to_rewrite : segments_to_rewrite) {
-      const SegmentId seg_id = seg_to_rewrite.sinfo->id();
+      const SegmentId seg_id = seg_to_rewrite.sinfo.id();
       write_futures.push_back(bg_threads_->Submit(
           [this, seg_id, zero]() { WritePage(seg_id, 0, zero); }));
     }
@@ -485,7 +493,7 @@ Status Manager::RewriteSegmentsImpl(
     write_futures.front().get();
   } else {
     // Clear the first segment synchronously.
-    WritePage(segments_to_rewrite.front().sinfo->id(), 0, zero);
+    WritePage(segments_to_rewrite.front().sinfo.id(), 0, zero);
   }
 
   // 4. Update in-memory index with the new segments. The new segments now
@@ -502,7 +510,7 @@ Status Manager::RewriteSegmentsImpl(
         }
       });
   for (const auto& seg : segments_to_rewrite) {
-    lock_manager_->ReleaseSegmentLock(seg.sinfo->id(),
+    lock_manager_->ReleaseSegmentLock(seg.sinfo.id(),
                                       SegmentMode::kReorgExclusive);
   }
 
@@ -516,7 +524,7 @@ Status Manager::RewriteSegmentsImpl(
   } else {
     // NOTE: We already synchronously invalidated the first segment.
     for (size_t i = 1; i < segments_to_rewrite.size(); ++i) {
-      const SegmentId seg_id = segments_to_rewrite[i].sinfo->id();
+      const SegmentId seg_id = segments_to_rewrite[i].sinfo.id();
       WritePage(seg_id, 0, zero);
     }
     for (const auto& overflow_to_clear : overflows_to_clear) {
@@ -526,7 +534,7 @@ Status Manager::RewriteSegmentsImpl(
   std::vector<SegmentId> to_free;
   to_free.reserve(segments_to_rewrite.size() + overflows_to_clear.size());
   for (const auto& seg_to_rewrite : segments_to_rewrite) {
-    to_free.push_back(seg_to_rewrite.sinfo->id());
+    to_free.push_back(seg_to_rewrite.sinfo.id());
   }
   for (const auto& overflow_to_clear : overflows_to_clear) {
     to_free.push_back(overflow_to_clear);
@@ -556,14 +564,14 @@ Status Manager::FlattenChain(
   if (base != seg.lower ||
       !ValidRangeForSegment(seg.lower, seg.upper, addtl_rec_begin,
                             addtl_rec_end)) {
-    lock_manager_->ReleaseSegmentLock(seg.sinfo->id(), SegmentMode::kReorg);
+    lock_manager_->ReleaseSegmentLock(seg.sinfo.id(), SegmentMode::kReorg);
     return Status::InvalidArgument(
         "FlattenChain(): Invalid record range; intervening rewrite.");
   }
 
   assert(base == seg.lower);
-  assert(seg.sinfo->page_count() == 1);
-  const SegmentId main_page_id = seg.sinfo->id();
+  assert(seg.sinfo.page_count() == 1);
+  const SegmentId main_page_id = seg.sinfo.id();
   const Key upper = seg.upper;
 
   // Load the existing page(s).
@@ -626,7 +634,7 @@ Status Manager::FlattenChain(
   // The flattened chain has been written to new pages. Now we upgrade the
   // segment lock to `kReorgExclusive` to wait for any concurrent readers to
   // finish reading the old chain.
-  lock_manager_->UpgradeSegmentLockToReorgExclusive(seg.sinfo->id());
+  lock_manager_->UpgradeSegmentLockToReorgExclusive(seg.sinfo.id());
 
   // For crash consistency, we need to invalidate at least one of the old pages
   // before exposing the newly rewritten pages. Ideally we would submit
@@ -662,7 +670,7 @@ Status Manager::FlattenChain(
     raw_index.erase(base);
     raw_index.insert(new_pages.begin(), new_pages.end());
   });
-  lock_manager_->ReleaseSegmentLock(seg.sinfo->id(),
+  lock_manager_->ReleaseSegmentLock(seg.sinfo.id(),
                                     SegmentMode::kReorgExclusive);
 
   free_->Add(main_page_id);
@@ -691,10 +699,10 @@ Status Manager::FlattenRange(const Key start_key, const Key end_key) {
   static const std::vector<Record> kEmptyRecords;
 
   Key curr_start = start_key;
-  std::vector<SegmentIndex::Entry> to_rewrite;
+  std::vector<SegmentIndex::EntryP> to_rewrite;
   while (curr_start < end_key) {
     while (true) {
-      const auto res =
+      auto res =
           index_->FindAndLockNextOverflowRegion(curr_start, end_key);
       if (res.has_value()) {
         to_rewrite = std::move(*res);

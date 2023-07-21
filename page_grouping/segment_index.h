@@ -4,6 +4,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <utility>
+#include <cstdint>
 
 #include "treeline/pg_db.h"
 #include "lock_manager.h"
@@ -21,7 +22,14 @@ class SegmentIndex {
     // The key boundaries of the segment.
     // Lower is inclusive (and is the segment's base key). Upper is exclusive.
     Key lower, upper;
-    SegmentInfo* sinfo;
+    SegmentInfo sinfo;
+  };
+
+  struct EntryP {
+    Key lower, upper;
+    SegmentInfo sinfo;
+    SegmentInfo* sinfop;
+    uint32_t index_version;
   };
 
   explicit SegmentIndex(std::shared_ptr<LockManager> lock_manager);
@@ -39,6 +47,9 @@ class SegmentIndex {
   //
   // The caller is responsible for releasing the lock.
   Entry SegmentForKeyWithLock(const Key key,
+                              LockManager::SegmentMode mode) const;
+
+  EntryP SegmentForKeyWithLockP(const Key key,
                               LockManager::SegmentMode mode) const;
 
   // Atomically retrieves the segment that logically follows the segment that is
@@ -67,8 +78,8 @@ class SegmentIndex {
   // Find a contiguous segment range to rewrite and acquire locks in `kReorg`
   // mode on the segments. If the returned vector is empty, the caller must
   // retry the call.
-  std::vector<Entry> FindAndLockRewriteRegion(const Key segment_base,
-                                              uint32_t search_radius) const;
+  std::vector<EntryP> FindAndLockRewriteRegion(const Key segment_base,
+                                              uint32_t search_radius);
 
   // Find a contiguous segment range where each segment contains at least one
   // overflow page and acquire locks in `kReorg` mode on the segments. This
@@ -78,8 +89,8 @@ class SegmentIndex {
   // If the returned optional is empty, the caller must retry the call. If the
   // returned optional is non-empty but the vector is empty, it means there are
   // no overflow pages in the segments starting at and following `start_key`.
-  std::optional<std::vector<Entry>> FindAndLockNextOverflowRegion(
-      const Key start_key, const Key end_key) const;
+  std::optional<std::vector<EntryP>> FindAndLockNextOverflowRegion(
+      const Key start_key, const Key end_key);
 
   // Mark whether or not the segment storing `key` has an overflow page.
   void SetSegmentOverflow(const Key key, bool overflow);
@@ -89,6 +100,13 @@ class SegmentIndex {
   void RunExclusive(const Callable& c) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     c(index_);
+    index_version_++; // Upadate the index version.
+  }
+
+  template <typename Callable>
+  void RunShared(const Callable& c) {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    c(index_, index_version_);
   }
 
   uint64_t GetSizeFootprint() const;
@@ -107,10 +125,11 @@ class SegmentIndex {
   // Returns true iff all the lock acquisitions succeed. `segments_to_lock` must
   // be sorted by the segments' lower bounds.
   bool LockSegmentsForRewrite(
-      const std::vector<SegmentIndex::Entry>& segments_to_lock) const;
+      std::vector<SegmentIndex::EntryP>& segments_to_lock);
   OrderedMap::iterator SegmentForKeyImpl(const Key key);
   OrderedMap::const_iterator SegmentForKeyImpl(const Key key) const;
   Entry IndexIteratorToEntry(OrderedMap::const_iterator it) const;
+  EntryP IndexIteratorToEntryP(OrderedMap::const_iterator it) const;
 
   // Used for acquiring segment locks. This pointer never changes after the
   // segment index is constructed.
@@ -121,6 +140,7 @@ class SegmentIndex {
   // Note: In theory, this can be any ordered key-value data structure (e.g.,
   // ART).
   OrderedMap index_;
+  uint32_t index_version_ = 0;
 };
 
 }  // namespace pg

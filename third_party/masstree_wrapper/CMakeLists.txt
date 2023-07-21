@@ -3,5 +3,5 @@ set(masstree_wrapper_sources
   masstree_wrapper.h 
 )
 
-target_sources(treeline PRIVATE ${masstree_wrapper_sources})
-target_sources(pg_treeline PRIVATE ${masstree_wrapper_sources})
+target_sources(treeline_cow PRIVATE ${masstree_wrapper_sources})
+target_sources(pg_treeline_cow PRIVATE ${masstree_wrapper_sources})

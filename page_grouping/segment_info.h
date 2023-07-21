@@ -13,7 +13,7 @@ namespace pg {
 class SegmentInfo {
  public:
   SegmentInfo(SegmentId id, std::optional<plr::Line64> model)
-      : raw_id_(id.value() & kSegmentIdMask), model_(model) { }
+      : raw_id_(id.value() & kSegmentIdMask), model_(model) { mapping_table_.SetValue(0); mapping_table_.SetVersion(0); }
 
   // Represents an invalid `SegmentInfo`.
   SegmentInfo() : raw_id_(kInvalidSegmentId) {}
@@ -72,27 +72,27 @@ class SegmentInfo {
     return mapping_table_.GetBackupPageNum(logical_page, pages);
   }
 
-  void UpdateMappingTable(std::vector<uint32_t>& ModifiedPages) {
-    mapping_table_.ReversePages(ModifiedPages);
+  uint32_t UpdateMappingTable(std::vector<uint32_t>& ModifiedPages) {
+    return mapping_table_.ReversePages(ModifiedPages);
   }
 
-  void UpadteBitMappingTable(uint32_t ModifiedPage) {
-    mapping_table_.ReversePage(ModifiedPage);
+  uint32_t UpdateBitMappingTable(uint32_t ModifiedPage) {
+    return mapping_table_.ReversePage(ModifiedPage);
   }
 
   uint32_t UpadteBitMappingTableTmp(uint32_t ModifiedPage){
     return mapping_table_.ReversePageTmp(ModifiedPage);
   }
 
-  void BindNewVersion() {
-    mapping_table_.BindingNewVersion();
+  uint32_t BindNewVersion() {
+    return mapping_table_.BindingNewVersion();
   }
 
-  uint32_t GetMappingValue() {
+  uint32_t GetMappingValue() const {
     return mapping_table_.GetValue();
   }
 
-  uint32_t GetVersionNum() {
+  uint32_t GetVersionNum() const {
     return mapping_table_.GetVersion();
   }
 

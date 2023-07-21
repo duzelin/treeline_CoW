@@ -1,4 +1,4 @@
-target_sources(treeline PRIVATE
+target_sources(treeline_cow PRIVATE
   buffer_frame.cc
   buffer_frame.h
   buffer_manager.cc

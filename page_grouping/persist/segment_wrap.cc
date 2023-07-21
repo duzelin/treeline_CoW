@@ -17,6 +17,10 @@ SegmentWrap::SegmentWrap(void* data, const size_t pages_in_segment)
   RestoreMappingTable();
 }
 
+void SegmentWrap::SetMappingTable(uint32_t mappings) {
+  mapping_table_.SetValue(mappings);
+}
+
 uint32_t SegmentWrap::GetSequenceNumber() const {
   if (pages_in_segment_ == 1) {
     return PageAtIndex(0).GetSequenceNumber();
@@ -47,16 +51,17 @@ void SegmentWrap::ComputeAndSetChecksum() {
 }
 
 void SegmentWrap::RestoreMappingTable() {
-  Page primary = PageAtIndex_phy(pages_in_segment_);
-  Page backup = PageAtIndex_phy(pages_in_segment_ * 2);
-  uint32_t version_primary = primary.GetVersionNum();
-  uint32_t version_backup = backup.GetVersionNum();
-  if (version_primary >= version_backup) {
+  uint32_t pri_version, bac_version;
+  Page primary = PageAtIndex_phy(pages_in_segment_ - 1);
+  Page backup = PageAtIndex_phy(pages_in_segment_ * 2 - 1);
+  pri_version = primary.GetVersionNum();
+  bac_version = backup.GetVersionNum();
+  if (pri_version >= bac_version) {
     mapping_table_.SetValue(primary.GetMappingTable());
-    mapping_table_.SetVersion(version_primary);
+    mapping_table_.SetVersion(pri_version);
   } else {
     mapping_table_.SetValue(backup.GetMappingTable());
-    mapping_table_.SetVersion(version_backup);
+    mapping_table_.SetVersion(bac_version);
   }
 }
 

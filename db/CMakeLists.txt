@@ -1,4 +1,4 @@
-target_sources(treeline PRIVATE
+target_sources(treeline_cow PRIVATE
   db_impl_range.cc
   db_impl.cc
   db_impl.h

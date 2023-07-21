@@ -87,6 +87,8 @@ struct PageGroupedDBOptions {
   // parallel when it shuts down.
   bool parallelize_final_flush = false;
 
+  //bool use_batch_update = false; // TODO
+
   // Options for insert forecasting.
   InsertForecastingOptions forecasting;
 
